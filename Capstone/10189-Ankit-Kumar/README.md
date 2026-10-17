@@ -1,18 +1,22 @@
 # Capstone: Low-Latency Order Book
 
-- Name: Ankit Kumar
-- email: ankit.24bcs10189@sst.scaler.com
-- roll_no:24bcs10189
+Team of 2:
+
+1. Ankit Kumar
+   - email: ankit.24bcs10189@sst.scaler.com
+   - roll_no:24bcs10189
+2. Pratham Jain
+   - roll_no:24bcs10083
 
 A resting order book for one instrument (no matching): add, cancel, BBO and depth queries.
-I wrote it three times on three different data structures, proved that all three give
+We wrote it three times on three different data structures, proved that all three give
 identical results, then benchmarked and profiled them to explain the differences.
 
 | | Design | One-line idea |
 |--|--|--|
 | **A** | `std::map` levels + `std::list` per level + `std::unordered_map` index | the textbook node-based book; every order and level is its own heap object |
 | **B** | sorted `std::vector` of levels (best at the back) + `std::unordered_map` | levels are contiguous and binary searched; orders live only in the hash map |
-| **C** | *my design*: price-indexed arrays + two-level bitmap + flat Robin Hood hash table | no search, no pointers, no per-order allocation; every operation is O(1) |
+| **C** | *our design*: price-indexed arrays + two-level bitmap + flat Robin Hood hash table | no search, no pointers, no per-order allocation; every operation is O(1) |
 
 **Headline (median of 5 runs, 1M ops):** C runs the workload in **17.4 ms** against 127.8 ms for B and 181.0 ms for A.
 `add_order` takes **25 ns** in C against 102 ns (B) and 222 ns (A), and `cancel_order` **98 ns** against 358 ns and 398 ns.
@@ -29,7 +33,7 @@ identical results, then benchmarked and profiled them to explain the differences
 | `verify.h` | the correctness test (`./bench --verify`) and a brute-force reference book |
 | `bench.cpp` | the single benchmark program: `--impl A/B/C`, `--verify`, `--baseline` |
 | `run_all.sh` | builds, verifies, benchmarks and profiles everything; all output lands in `results/` |
-| `results/` | my raw outputs: `verify.txt`, `bench_X.txt`, `perf_stat_X.txt`, `perf_report_X.txt`, `cachegrind_X.txt`, experiments |
+| `results/` | our raw outputs: `verify.txt`, `bench_X.txt`, `perf_stat_X.txt`, `perf_report_X.txt`, `cachegrind_X.txt`, experiments |
 
 ## How to build
 
@@ -109,7 +113,7 @@ The three designs solve these two problems in genuinely different ways:
 - **Best bid/ask:** `back()`. Because the best is at the back, a new best level is a `push_back` and removing the best level is a `pop_back`. Only levels created or emptied deep in the book shift memory.
 - **Cancel:** hash lookup gives the price; `std::lower_bound` (about 13 steps for 5000 levels) finds the level; subtract; `erase` the level if it is empty.
 
-### C (my design): price-indexed arrays + bitmap + Robin Hood hash table
+### C (our design): price-indexed arrays + bitmap + Robin Hood hash table
 
 - **Price levels:** `std::array<Qty, 5000>` per side: one 8-byte total per possible price, 40 KB per side. Both sides are stored so that **a higher index is a better price** (bids: `price - 50.00`, asks: `150.00 - price`), so one piece of code handles both.
 - **Best bid/ask:** a cached index per side. An add can only improve it (one compare). When a cancel empties the best level, `LevelBitmap::find_prev` finds the next non-empty level: one bit per level in 79 64-bit words, plus a 2-word summary with one bit per non-empty word. It checks the current word and, if that is empty, jumps through the summary with count-leading-zeros. That is O(1) for 5000 levels, and the same walk serves `get_bids`/`get_asks`.
@@ -138,7 +142,7 @@ plain array, with every query scanning the price band, so it is easy to see that
 - **Random workloads,** compared after **every** operation (return value, `get_bbo`, `get_bids(10)`, `get_asks(10)`, plus a second cancel that must fail), and on full depth every 1000 ops:
   the benchmark workload itself; a "churn" workload on the 8 ticks nearest the mid, where levels empty and refill and the best moves constantly; a "sparse" book with big gaps; and two id patterns that cause hash collisions (scrambled 64-bit ids, and ids `k << 20`). The books start with room for 64 orders, so every hash table rehashes many times.
 
-To check that the test can actually fail, I broke book C on purpose, one bug at a time: a best-price fallback that skips a level, a broken backward-shift erase, and a wrong Robin Hood swap rule. `--verify` reported `FAIL` for C every time.
+To check that the test can actually fail, we broke book C on purpose, one bug at a time: a best-price fallback that skips a level, a broken backward-shift erase, and a wrong Robin Hood swap rule. `--verify` reported `FAIL` for C every time.
 
 ```
 Implementation A: PASS  (8896670 checks, 0 failed)
@@ -152,12 +156,12 @@ The benchmark checksum (a fold of every query result) is also identical for all 
 
 ## Benchmark method
 
-- **Workload** (`workload.h`): 1,000,000 ops with `std::mt19937(42)`: 700,471 adds, 199,305 cancels and 100,224 `get_bbo`. `get_bids(10)` and `get_asks(10)` are called after every 100 ops. Side is 50/50, qty is 1–100, and the price is a uniform tick in the side's band. A cancel always picks a random *live* order. The stream is generated **before** timing, and I map random numbers to ranges by hand rather than with `std::uniform_int_distribution`, so the stream is identical with any standard library.
+- **Workload** (`workload.h`): 1,000,000 ops with `std::mt19937(42)`: 700,471 adds, 199,305 cancels and 100,224 `get_bbo`. `get_bids(10)` and `get_asks(10)` are called after every 100 ops. Side is 50/50, qty is 1–100, and the price is a uniform tick in the side's band. A cancel always picks a random *live* order. The stream is generated **before** timing, and we map random numbers to ranges by hand rather than with `std::uniform_int_distribution`, so the stream is identical with any standard library.
 - **Each run** builds a fresh book and replays the stream twice:
   1. **Throughput pass:** no timers inside the loop. Gives **total time**.
-  2. **Latency pass:** each call wrapped in `steady_clock::now()`. Gives ns per op type (avg, p50, p99, p99.9, max). The ~15 ns cost of a clock pair is included; I print it.
+  2. **Latency pass:** each call wrapped in `steady_clock::now()`. Gives ns per op type (avg, p50, p99, p99.9, max). The ~15 ns cost of a clock pair is included; the benchmark prints it.
 
-  Also, because one `get_bbo` costs about the same as a clock read, I time 10M back-to-back `get_bbo` calls with a single clock pair.
+  Also, because one `get_bbo` costs about the same as a clock read, we time 10M back-to-back `get_bbo` calls with a single clock pair.
 - **5 runs, median reported.** An `asm volatile` barrier keeps every result alive, and the final BBO and checksum are printed.
 - **Environment:** i5-13450HX laptop on AC power, Ubuntu 24.04 in **WSL2**, g++ 13.3 `-O2`, process pinned with `taskset -c 2` (`results/system.txt`).
 
@@ -165,7 +169,7 @@ The benchmark checksum (a fold of every query result) is also identical for all 
 `Performance Events: unsupported CPU family 6 model 183 no PMU driver, software events only.`
 Hyper-V does not expose the PMU of this hybrid Raptor Lake CPU to the VM, so `cycles`, `instructions`,
 `branches`, `branch-misses`, `cache-misses`, `L1-dcache-load-misses` and `dTLB-load-misses` all show `<not supported>`. IPC cannot be measured.
-`task-clock` and `page-faults` work. To still get instruction, cache and branch numbers, I ran every book under **valgrind cachegrind**
+`task-clock` and `page-faults` work. To still get instruction, cache and branch numbers, we ran every book under **valgrind cachegrind**
 (`--cache-sim=yes --branch-sim=yes`). Those counts are *simulated*: exact instruction counts, a modelled cache hierarchy and a simple branch predictor.
 `perf record` falls back to the `task-clock` software event, which is fine for finding hot spots.
 On a Linux machine with a PMU, `run_all.sh` fills in all the hardware counters unchanged.
@@ -277,7 +281,7 @@ Full reports are in `results/perf_report_X.txt` (by function) and `results/perf_
 - **`get_bbo`: a tie.** All three are O(1) and cost about 1 ns in a tight loop (A 0.75, C 0.92, B 0.95 ns). The 23–28 ns per-call figures are almost entirely the 15 ns clock pair. A keeps the leftmost node cached, B reads `back()`, C reads a cached index. Each is one or two loads that hit L1.
 
 The two passes also differ. C's throughput pass costs 17.4 ns/op, while its timed calls average about 39 ns per op (about 24 ns after removing the 15 ns clock pair). A shows the same pattern: 181 ns/op against about 225 ns.
-The clock read is ordered (the vDSO uses an ordered `rdtsc`), so each timed call runs on its own. Untimed, the out-of-order core overlaps the cache misses of consecutive independent operations. Per-call latency and throughput are different questions, which is why I report both.
+The clock read is ordered (the vDSO uses an ordered `rdtsc`), so each timed call runs on its own. Untimed, the out-of-order core overlaps the cache misses of consecutive independent operations. Per-call latency and throughput are different questions, which is why we report both.
 
 ### 11.2 Branch prediction
 
@@ -309,20 +313,20 @@ A also pays heavily at teardown. Freeing about 1 M nodes (`_M_erase`, `~_Hashtab
 
 ### 11.5 Production choice
 
-**I would deploy C**, with eyes open about its costs:
+**We would deploy C**, with eyes open about its costs:
 
 - **Latency:** fastest at every operation and 7–10× the throughput.
 - **Predictability:** the strongest reason. C's p99 (add 40 ns, cancel 296 ns) and p99.9 (177 / 461 ns) are tighter than A's and B's. Its hot path never calls `malloc`, never takes a page fault after construction, and never does more than O(1) work: no rebalancing, no memmove, no rehash at the configured capacity. A and B have `malloc` in the hot path, which has its own slow paths, and B has an O(L) shift when levels appear mid-book.
-- **Memory:** smallest (16 MB against 31 / 62 MB) and fixed. In production I would size the table for the worst day and alert if it ever grows, rather than rehash 16 MB mid-session.
+- **Memory:** smallest (16 MB against 31 / 62 MB) and fixed. In production we would size the table for the worst day and alert if it ever grows, rather than rehash 16 MB mid-session.
 - **Cache behaviour:** flat arrays, 2 lines per op, no pointers.
-- **Complexity / maintainability:** C's weak spot. A is about 130 lines of standard containers that any C++ developer can read. C needs its own Robin Hood table and bitmap, about 180 lines with subtle invariants (I got the erase wrong at first, see below). It also assumes a **fixed price band**: a new band, or an instrument that drifts far, needs re-centering. And it keeps no per-order FIFO, which a matching engine would need. I would mitigate this by keeping A, or `ReferenceBook`, as the test oracle; `--verify` is exactly that differential test, and it catches the bugs I injected.
+- **Complexity / maintainability:** C's weak spot. A is about 130 lines of standard containers that any C++ developer can read. C needs its own Robin Hood table and bitmap, about 180 lines with subtle invariants (we got the erase wrong at first, see below). It also assumes a **fixed price band**: a new band, or an instrument that drifts far, needs re-centering. And it keeps no per-order FIFO, which a matching engine would need. We would mitigate this by keeping A, or `ReferenceBook`, as the test oracle; `--verify` is exactly that differential test, and it catches the bugs we injected.
 
 A is the "correct by construction" choice for a prototype or for instruments with unbounded prices. For a latency-critical book on a known band, C's predictability is worth the extra code.
 
-### 11.6 What I would try next
+### 11.6 What we would try next
 
 1. **Huge pages for the order table** (`madvise(MADV_HUGEPAGE)`): 16 MB is 8 × 2 MB pages instead of 4096 × 4 KB. The cancel's one random access currently also risks a TLB miss, which is a two-level page walk under WSL2's nested paging.
-2. **Software prefetch in batches:** market data arrives in packets, so I could prefetch the slot of the next message's order while handling the current one. The throughput-vs-latency gap above shows the core gains a lot from overlapping misses.
+2. **Software prefetch in batches:** market data arrives in packets, so we could prefetch the slot of the next message's order while handling the current one. The throughput-vs-latency gap above shows the core gains a lot from overlapping misses.
 3. **Direct-indexed orders** when ids are dense (exchange sequence numbers): a ring buffer indexed by `id - base` replaces hashing and probing entirely.
 4. **For A:** a pool allocator (`std::pmr::unsynchronized_pool_resource`) to take `malloc`, page faults and the expensive teardown out of the picture. **For B:** a power-of-two hash table (removes the `%`, 16% of B's time) and a branchless or Eytzinger-layout binary search.
 5. **No allocation in depth queries:** `get_bids`/`get_asks` return a `std::vector`, so every call allocates. Writing into a caller-provided fixed array would remove most of the ~130 ns.
@@ -333,7 +337,7 @@ A is the "correct by construction" choice for a prototype or for instruments wit
 
 ### How C evolved: hash function and probing
 
-My first C used Fibonacci hashing (`id × 0x9E3779B97F4A7C15 >> shift`), the usual choice for spreading keys. Measuring it changed my mind twice. Data in `results/history_C.txt` and `results/experiment_C_fibonacci_hash.txt`:
+Our first C used Fibonacci hashing (`id × 0x9E3779B97F4A7C15 >> shift`), the usual choice for spreading keys. Measuring it changed our minds twice. Data in `results/history_C.txt` and `results/experiment_C_fibonacci_hash.txt`:
 
 | C variant | total | add avg | cancel avg | cancel p50 | cancel p99 | cancel p99.9 | instructions |
 |--|--|--|--|--|--|--|--|
@@ -345,7 +349,7 @@ My first C used Fibonacci hashing (`id × 0x9E3779B97F4A7C15 >> shift`), the usu
 (v2 and v3 come from one back-to-back run; ns per call.)
 
 - **v1 → v2:** Fibonacci hashing sends consecutive ids to random slots, so *every add* missed cache (126 ns). `std::unordered_map` uses an identity hash, which is why B's adds were faster than C's at first. The XOR-fold keeps consecutive ids in consecutive slots: **add 126 → 23 ns**.
-- **v2 → v3:** cachegrind then showed v2 running 90 M *more* instructions than v1, and the cancel tail got worse (p99.9 1.4 µs). The cause was plain linear-probing deletion. It has to scan to the end of the occupied run, and with sequential ids the run after a recent order stretches to the newest id, hundreds of slots. Robin Hood insertion keeps runs ordered by home slot, so the erase stops at the first entry already at home. Result: **p99.9 1429 → 437 ns**, 22% fewer instructions, and 20.6 → 15.1 ms total. The cancel median rose (~50 → ~97 ns, the same in both rounds of the back-to-back run). I haven't pinned down why without hardware counters, but for a trading system I'll trade a slower median for a 3× tighter tail.
+- **v2 → v3:** cachegrind then showed v2 running 90 M *more* instructions than v1, and the cancel tail got worse (p99.9 1.4 µs). The cause was plain linear-probing deletion. It has to scan to the end of the occupied run, and with sequential ids the run after a recent order stretches to the newest id, hundreds of slots. Robin Hood insertion keeps runs ordered by home slot, so the erase stops at the first entry already at home. Result: **p99.9 1429 → 437 ns**, 22% fewer instructions, and 20.6 → 15.1 ms total. The cancel median rose (~50 → ~97 ns, the same in both rounds of the back-to-back run). We haven't pinned down why without hardware counters, but for a trading system we'll trade a slower median for a 3× tighter tail.
 
 ### What if order ids are not sequential?
 
