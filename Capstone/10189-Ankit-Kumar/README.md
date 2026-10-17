@@ -6,6 +6,7 @@ Team of 2:
    - email: ankit.24bcs10189@sst.scaler.com
    - roll_no:24bcs10189
 2. Pratham Jain
+   - email: pratham.24bcs10083@sst.scaler.com
    - roll_no:24bcs10083
 
 A resting order book for one instrument (no matching): add, cancel, BBO and depth queries.
